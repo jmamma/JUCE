@@ -32,6 +32,12 @@
   ==============================================================================
 */
 
+// Thread-local timestamp override for MIDI output.
+// When non-zero, the Windows MIDI Services send path uses this instead of 0 ("now").
+// NativeMidiClock sets this before calling sendMessageNow for future-timestamped events.
+// Reset to 0 after each use (consumed by the send path).
+thread_local uint64_t g_juceMidiTimestampOverride = 0;
+
 #ifndef DRV_QUERYDEVICEINTERFACE
  #define DRV_RESERVED                  0x0800
  #define DRV_QUERYDEVICEINTERFACE     (DRV_RESERVED + 12)
@@ -141,7 +147,12 @@ private:
 
         bool send (ump::Iterator b, ump::Iterator e)
         {
-            const auto result = connection.SendMultipleMessagesWordArray (0,
+            uint64_t ts = 0;
+            if (g_juceMidiTimestampOverride != 0) {
+                ts = g_juceMidiTimestampOverride;
+                g_juceMidiTimestampOverride = 0;
+            }
+            const auto result = connection.SendMultipleMessagesWordArray (ts,
                                                                           0,
                                                                           (uint32_t) std::distance (b->data(), e->data()),
                                                                           { b->data(), e->data() });
