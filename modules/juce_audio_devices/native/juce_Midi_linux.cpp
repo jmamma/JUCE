@@ -32,6 +32,12 @@
   ==============================================================================
 */
 
+// Thread-local timestamp override for ALSA MIDI output.
+// When non-zero, the output path uses snd_seq_ev_schedule_real() with a future
+// timestamp instead of snd_seq_ev_set_direct(). Value is in steady_clock nanoseconds.
+// Reset to 0 after each use (consumed by the send path).
+thread_local uint64_t g_juceMidiTimestampOverride = 0;
+
 namespace juce
 {
 
@@ -1056,6 +1062,51 @@ struct AlsaMidiHelpers
             }
         };
 
+        // Lazily create an ALSA queue for scheduled output delivery.
+        // Returns queue ID, or -1 if creation failed.
+        int ensureOutputQueue (snd_seq_t* seqHandle)
+        {
+            if (outputQueueId >= 0)
+                return outputQueueId;
+
+            outputQueueId = snd_seq_alloc_queue (seqHandle);
+            if (outputQueueId < 0)
+                return -1;
+
+            snd_seq_start_queue (seqHandle, outputQueueId, nullptr);
+            snd_seq_drain_output (seqHandle);
+
+            // Record queue start time for steady_clock → queue-relative conversion
+            using namespace std::chrono;
+            outputQueueStartNanos = (uint64_t) duration_cast<nanoseconds> (
+                steady_clock::now().time_since_epoch()).count();
+
+            return outputQueueId;
+        }
+
+        // Set event timing: scheduled if override is set, direct otherwise.
+        // For snd_seq_event_t (bytestream path).
+        void setEventTiming (snd_seq_event_t& event, snd_seq_t* seqHandle)
+        {
+            if (g_juceMidiTimestampOverride != 0)
+            {
+                int qId = ensureOutputQueue (seqHandle);
+                if (qId >= 0)
+                {
+                    uint64_t queueNanos = g_juceMidiTimestampOverride - outputQueueStartNanos;
+                    g_juceMidiTimestampOverride = 0;
+
+                    snd_seq_real_time_t rt;
+                    rt.tv_sec = (unsigned int) (queueNanos / 1000000000ULL);
+                    rt.tv_nsec = (unsigned int) (queueNanos % 1000000000ULL);
+                    snd_seq_ev_schedule_real (&event, qId, 0, &rt);
+                    return;
+                }
+                g_juceMidiTimestampOverride = 0;
+            }
+            snd_seq_ev_set_direct (&event);
+        }
+
         void sendUmp (ump::View v)
         {
             if (snd_seq_ump_event_output_direct == nullptr)
@@ -1065,7 +1116,32 @@ struct AlsaMidiHelpers
 
             snd_seq_ev_set_source (&event, (unsigned char) port->getPortId());
             snd_seq_ev_set_subs (&event);
-            snd_seq_ev_set_direct (&event);
+
+            // UMP path: check timestamp override
+            if (g_juceMidiTimestampOverride != 0)
+            {
+                auto seqHandle = port->getClient()->getSequencer();
+                int qId = ensureOutputQueue (seqHandle);
+                if (qId >= 0)
+                {
+                    uint64_t queueNanos = g_juceMidiTimestampOverride - outputQueueStartNanos;
+                    g_juceMidiTimestampOverride = 0;
+
+                    snd_seq_real_time_t rt;
+                    rt.tv_sec = (unsigned int) (queueNanos / 1000000000ULL);
+                    rt.tv_nsec = (unsigned int) (queueNanos % 1000000000ULL);
+                    snd_seq_ev_schedule_real (&event, qId, 0, &rt);
+                }
+                else
+                {
+                    g_juceMidiTimestampOverride = 0;
+                    snd_seq_ev_set_direct (&event);
+                }
+            }
+            else
+            {
+                snd_seq_ev_set_direct (&event);
+            }
 
             event.flags |= SND_SEQ_EVENT_UMP;
             event.type = 0;
@@ -1110,7 +1186,7 @@ struct AlsaMidiHelpers
 
                     snd_seq_ev_set_source (&event, (unsigned char) port->getPortId());
                     snd_seq_ev_set_subs (&event);
-                    snd_seq_ev_set_direct (&event);
+                    setEventTiming (event, seqHandle);
 
                     if (snd_seq_event_output_direct (seqHandle, &event) < 0)
                         break;
@@ -1126,6 +1202,8 @@ struct AlsaMidiHelpers
 
         std::unique_ptr<snd_midi_event_t, SndMidiEventDeleter> midiParser;
         size_t maxEventSize = 4096;
+        int outputQueueId = -1;
+        uint64_t outputQueueStartNanos = 0;
     };
 
     static void copyToBlock (snd_ump_block_info_t& dst, uint8_t index, const ump::Block& src)
