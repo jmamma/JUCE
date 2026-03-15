@@ -32,6 +32,12 @@
   ==============================================================================
 */
 
+// Thread-local timestamp override for MIDIReceived/MIDISend.
+// When non-zero, JUCE's output path uses this instead of AudioGetCurrentHostTime().
+// NativeMidiClock sets this before calling sendMessageNow for future-timestamped events.
+// Reset to 0 after each use (consumed by the send path).
+thread_local uint64_t g_juceMidiTimestampOverride = 0;
+
 namespace juce
 {
 
@@ -1494,11 +1500,17 @@ struct CoreMidiHelpers
     public:
         bool send (const MidiPortAndEndpoint& portAndEndpoint, ump::Iterator b, ump::Iterator e) override
         {
-           #if JUCE_IOS
-            const MIDITimeStamp timeStamp = mach_absolute_time();
-           #else
-            const MIDITimeStamp timeStamp = AudioGetCurrentHostTime();
-           #endif
+            MIDITimeStamp timeStamp;
+            if (g_juceMidiTimestampOverride != 0) {
+                timeStamp = g_juceMidiTimestampOverride;
+                g_juceMidiTimestampOverride = 0;
+            } else {
+               #if JUCE_IOS
+                timeStamp = mach_absolute_time();
+               #else
+                timeStamp = AudioGetCurrentHostTime();
+               #endif
+            }
 
             MIDIEventList stackList = {};
             MIDIEventPacket* end = nullptr;
@@ -1584,11 +1596,17 @@ struct CoreMidiHelpers
     private:
         void sendBytes (const MidiPortAndEndpoint& portAndEndpoint, Span<const std::byte> message)
         {
-           #if JUCE_IOS
-            const MIDITimeStamp timeStamp = mach_absolute_time();
-           #else
-            const MIDITimeStamp timeStamp = AudioGetCurrentHostTime();
-           #endif
+            MIDITimeStamp timeStamp;
+            if (g_juceMidiTimestampOverride != 0) {
+                timeStamp = g_juceMidiTimestampOverride;
+                g_juceMidiTimestampOverride = 0;
+            } else {
+               #if JUCE_IOS
+                timeStamp = mach_absolute_time();
+               #else
+                timeStamp = AudioGetCurrentHostTime();
+               #endif
+            }
 
             HeapBlock<MIDIPacketList> allocatedPackets;
             MIDIPacketList stackPacket;
