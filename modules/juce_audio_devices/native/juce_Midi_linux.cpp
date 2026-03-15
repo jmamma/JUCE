@@ -1028,6 +1028,13 @@ struct AlsaMidiHelpers
 
         ~OutputImplNative() override
         {
+            if (outputQueueId >= 0)
+            {
+                auto seqHandle = port->getClient()->getSequencer();
+                snd_seq_stop_queue (seqHandle, outputQueueId, nullptr);
+                snd_seq_drain_output (seqHandle);
+                snd_seq_free_queue (seqHandle, outputQueueId);
+            }
             port->removeDisconnectionListener (listener);
         }
 
@@ -1086,12 +1093,14 @@ struct AlsaMidiHelpers
 
         // Set event timing: scheduled if override is set, direct otherwise.
         // For snd_seq_event_t (bytestream path).
-        void setEventTiming (snd_seq_event_t& event, snd_seq_t* seqHandle)
+        // Returns true if event was scheduled (caller should use buffered output + drain),
+        // false if direct (caller should use output_direct).
+        bool setEventTiming (snd_seq_event_t& event, snd_seq_t* seqHandle)
         {
             if (g_juceMidiTimestampOverride != 0)
             {
                 int qId = ensureOutputQueue (seqHandle);
-                if (qId >= 0)
+                if (qId >= 0 && g_juceMidiTimestampOverride > outputQueueStartNanos)
                 {
                     uint64_t queueNanos = g_juceMidiTimestampOverride - outputQueueStartNanos;
                     g_juceMidiTimestampOverride = 0;
@@ -1100,11 +1109,12 @@ struct AlsaMidiHelpers
                     rt.tv_sec = (unsigned int) (queueNanos / 1000000000ULL);
                     rt.tv_nsec = (unsigned int) (queueNanos % 1000000000ULL);
                     snd_seq_ev_schedule_real (&event, qId, 0, &rt);
-                    return;
+                    return true;
                 }
                 g_juceMidiTimestampOverride = 0;
             }
             snd_seq_ev_set_direct (&event);
+            return false;
         }
 
         void sendUmp (ump::View v)
@@ -1112,17 +1122,17 @@ struct AlsaMidiHelpers
             if (snd_seq_ump_event_output_direct == nullptr)
                 return;
 
+            auto seqHandle = port->getClient()->getSequencer();
             snd_seq_ump_event_t event{};
 
             snd_seq_ev_set_source (&event, (unsigned char) port->getPortId());
             snd_seq_ev_set_subs (&event);
 
-            // UMP path: check timestamp override
+            bool scheduled = false;
             if (g_juceMidiTimestampOverride != 0)
             {
-                auto seqHandle = port->getClient()->getSequencer();
                 int qId = ensureOutputQueue (seqHandle);
-                if (qId >= 0)
+                if (qId >= 0 && g_juceMidiTimestampOverride > outputQueueStartNanos)
                 {
                     uint64_t queueNanos = g_juceMidiTimestampOverride - outputQueueStartNanos;
                     g_juceMidiTimestampOverride = 0;
@@ -1131,6 +1141,7 @@ struct AlsaMidiHelpers
                     rt.tv_sec = (unsigned int) (queueNanos / 1000000000ULL);
                     rt.tv_nsec = (unsigned int) (queueNanos % 1000000000ULL);
                     snd_seq_ev_schedule_real (&event, qId, 0, &rt);
+                    scheduled = true;
                 }
                 else
                 {
@@ -1147,8 +1158,18 @@ struct AlsaMidiHelpers
             event.type = 0;
             memcpy (event.ump, v.data(), sizeof (uint32_t) * v.size());
 
-            [[maybe_unused]] const auto code = snd_seq_ump_event_output_direct (port->getClient()->getSequencer(), &event);
-            jassert (code >= 0);
+            // Scheduled events must use buffered output so the kernel queue delivers them
+            // at the right time. Direct output bypasses the queue entirely.
+            if (scheduled)
+            {
+                snd_seq_event_output (seqHandle, reinterpret_cast<snd_seq_event_t*> (&event));
+                snd_seq_drain_output (seqHandle);
+            }
+            else
+            {
+                [[maybe_unused]] const auto code = snd_seq_ump_event_output_direct (seqHandle, &event);
+                jassert (code >= 0);
+            }
         }
 
         void sendBytestream (ump::View v)
@@ -1186,10 +1207,21 @@ struct AlsaMidiHelpers
 
                     snd_seq_ev_set_source (&event, (unsigned char) port->getPortId());
                     snd_seq_ev_set_subs (&event);
-                    setEventTiming (event, seqHandle);
+                    bool scheduled = setEventTiming (event, seqHandle);
 
-                    if (snd_seq_event_output_direct (seqHandle, &event) < 0)
-                        break;
+                    // Scheduled events must use buffered output so the kernel queue
+                    // delivers them at the right time. Direct output ignores scheduling.
+                    if (scheduled)
+                    {
+                        if (snd_seq_event_output (seqHandle, &event) < 0)
+                            break;
+                        snd_seq_drain_output (seqHandle);
+                    }
+                    else
+                    {
+                        if (snd_seq_event_output_direct (seqHandle, &event) < 0)
+                            break;
+                    }
                 }
 
                 snd_midi_event_reset_encode (midiParser.get());
