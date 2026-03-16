@@ -833,11 +833,6 @@ private:
     {
         PopupMenu m;
         m.addItem (1, TRANS ("Audio/MIDI Settings..."));
-        m.addSeparator();
-        m.addItem (2, TRANS ("Save current state..."));
-        m.addItem (3, TRANS ("Load a saved state..."));
-        m.addSeparator();
-        m.addItem (4, TRANS ("Reset to default state"));
 
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (button),
                          ModalCallbackFunction::forComponent (menuCallback, this));
