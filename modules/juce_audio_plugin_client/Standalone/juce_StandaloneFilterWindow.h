@@ -471,8 +471,8 @@ private:
               deviceSelector (deviceManagerToUse,
                               0, maxAudioInputChannels,
                               0, maxAudioOutputChannels,
-                              true,
-                              (pluginHolder.processor.get() != nullptr && pluginHolder.processor->producesMidi()),
+                              false,  // MIDI input handled by Direct MIDI (SPS-X virtual ports)
+                              false,  // MIDI output handled by Direct MIDI
                               true, false),
               shouldMuteLabel  ("Feedback Loop:", "Feedback Loop:"),
               shouldMuteButton ("Mute audio input")
@@ -580,7 +580,8 @@ private:
         emptyBuffer.clear();
 
         player.audioDeviceAboutToStart (device);
-        player.setMidiOutput (deviceManager.getDefaultMidiOutput());
+        // MIDI output handled by Direct MIDI, not the standalone wrapper.
+        // player.setMidiOutput (deviceManager.getDefaultMidiOutput());
     }
 
     void audioDeviceStopped() override
@@ -596,7 +597,9 @@ private:
                             const AudioDeviceManager::AudioDeviceSetup* preferredSetupOptions)
     {
         deviceManager.addAudioCallback (this);
-        deviceManager.addMidiInputDeviceCallback ({}, &player);
+        // MIDI input/output handled by Direct MIDI (SPS-X virtual ports),
+        // not by the standalone wrapper's device manager.
+        // deviceManager.addMidiInputDeviceCallback ({}, &player);
 
         reloadAudioDeviceState (enableAudioInput, preferredDefaultDeviceName, preferredSetupOptions);
     }
@@ -605,26 +608,13 @@ private:
     {
         saveAudioDeviceState();
 
-        deviceManager.removeMidiInputDeviceCallback ({}, &player);
+        // deviceManager.removeMidiInputDeviceCallback ({}, &player);
         deviceManager.removeAudioCallback (this);
     }
 
     void timerCallback() override
     {
-        auto newMidiDevices = MidiInput::getAvailableDevices();
-
-        if (newMidiDevices != lastMidiDevices)
-        {
-            for (auto& oldDevice : lastMidiDevices)
-                if (! newMidiDevices.contains (oldDevice))
-                    deviceManager.setMidiInputDeviceEnabled (oldDevice.identifier, false);
-
-            for (auto& newDevice : newMidiDevices)
-                if (! lastMidiDevices.contains (newDevice))
-                    deviceManager.setMidiInputDeviceEnabled (newDevice.identifier, true);
-
-            lastMidiDevices = newMidiDevices;
-        }
+        // MIDI device auto-enable disabled — Direct MIDI manages its own devices.
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StandalonePluginHolder)
