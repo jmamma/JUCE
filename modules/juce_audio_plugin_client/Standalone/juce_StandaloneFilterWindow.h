@@ -307,7 +307,7 @@ public:
 
         o.content.setOwned (content.release());
 
-        o.dialogTitle                   = TRANS ("Audio/MIDI Settings");
+        o.dialogTitle                   = TRANS ("Audio Settings");
         o.dialogBackgroundColour        = o.content->getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
         o.escapeKeyTriggersCloseButton  = true;
         o.useNativeTitleBar             = true;
@@ -822,7 +822,7 @@ private:
     void buttonClicked (Button* button) override
     {
         PopupMenu m;
-        m.addItem (1, TRANS ("Audio/MIDI Settings..."));
+        m.addItem (1, TRANS ("Audio Settings..."));
 
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (button),
                          ModalCallbackFunction::forComponent (menuCallback, this));
