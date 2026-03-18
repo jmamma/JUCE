@@ -427,8 +427,8 @@ public:
     AudioProcessorPlayer player;
     Array<PluginInOuts> channelConfiguration;
 
-    // avoid feedback loop by default
-    bool processorHasPotentialFeedbackLoop = true;
+    // Audio input feeds DSP2 machines (INP/RAM-R), not looped back to output.
+    bool processorHasPotentialFeedbackLoop = false;
     std::atomic<bool> muteInput { true };
     Value shouldMuteInput;
     AudioBuffer<float> emptyBuffer;
@@ -450,7 +450,8 @@ private:
         processor->disableNonMainBuses();
         processor->setRateAndBufferSizeDetails (44100, 512);
 
-        processorHasPotentialFeedbackLoop = (getNumInputChannels() > 0 && getNumOutputChannels() > 0);
+        // Audio input feeds DSP2 machines, not looped back to output.
+        processorHasPotentialFeedbackLoop = false;
     }
 
     void handleDeletePlugin()
