@@ -470,7 +470,7 @@ private:
                            int maxAudioOutputChannels)
             : owner (pluginHolder),
               deviceSelector (deviceManagerToUse,
-                              0, maxAudioInputChannels,
+                              maxAudioInputChannels, maxAudioInputChannels,
                               0, maxAudioOutputChannels,
                               false,  // MIDI input handled by Direct MIDI (SPS-X virtual ports)
                               false,  // MIDI output handled by Direct MIDI
